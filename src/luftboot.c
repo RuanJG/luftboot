@@ -53,6 +53,13 @@
 
 #define FLASH_OBP_RDP_KEY 0x5aa5
 
+
+
+
+#define ENABLE_FLASH_PROTECT 0
+
+
+
 static const char
 dev_serial[] __attribute__((section (".devserial"))) = DEV_SERIAL;
 
@@ -202,6 +209,7 @@ static void usbdfu_getstatus_complete(usbd_device *device,
 		return;
 
 	case STATE_DFU_MANIFEST:
+	#if ENABLE_FLASH_PROTECT
 		/* Mark DATA0 register that we have just downloaded the code */
 		if((FLASH_OBR & 0x3FC00) != 0x00) {
 		  flash_unlock();
@@ -212,6 +220,7 @@ static void usbdfu_getstatus_complete(usbd_device *device,
 		  flash_program_option_bytes(FLASH_OBP_DATA0, 0xFF00);
 		  flash_lock();
 		}
+	#endif
 		/* USB device must detach, we just reset... */
 		scb_reset_system();
 		return; /* Will never return */
@@ -304,12 +313,12 @@ static inline void gpio_init(void)
 	/* LED2, ADC4, ADC6 */
 	/* Set GPIO15, GPIO5, GPIO2 (in GPIO port C) to 'output push-pull'. */
 	gpio_set_mode(GPIOC, GPIO_MODE_OUTPUT_50_MHZ,
-				  GPIO_CNF_OUTPUT_PUSHPULL, GPIO15 | GPIO5 | GPIO2);
+				  GPIO_CNF_OUTPUT_PUSHPULL, GPIO13 | GPIO5 | GPIO2);
 
 	/* Preconfigure the LEDs. */
 	gpio_set(GPIOA, GPIO8);
 	gpio_set(GPIOB, GPIO4);
-	gpio_set(GPIOC, GPIO15 | GPIO5 | GPIO2);
+	gpio_set(GPIOC, GPIO13 | GPIO5 | GPIO2);
 }
 
 void led_set(int id, int on)
@@ -329,7 +338,7 @@ void led_set(int id, int on)
 				gpio_clear(GPIOC, GPIO5); /* ADC4 On */
 				break;
 			case 4:
-				gpio_clear(GPIOC, GPIO15); /* LED2 On */
+				gpio_clear(GPIOC, GPIO13); /* LED2 On */
 				break;
 		}
 	} else {
@@ -347,7 +356,7 @@ void led_set(int id, int on)
 				gpio_set(GPIOC, GPIO5); /* ADC4 On */
 				break;
 			case 4:
-				gpio_set(GPIOC, GPIO15); /* LED2 On */
+				gpio_set(GPIOC, GPIO13); /* LED2 On */
 				break;
 		}
 	}
@@ -357,6 +366,7 @@ static inline void led_advance(void)
 {
 	static int state = 0;
 
+/*
 	if (state < 5) {
 		led_set(state, 1);
 	} else if (state < 10) {
@@ -366,7 +376,11 @@ static inline void led_advance(void)
 	} else if (state < 20) {
 		led_set(19 - state, 0);
 	}
-
+*/
+	if( state == 1 )
+		led_set(4,1);
+	if( state == 10)
+		led_set(4,0);
 	state++;
 	if(state == 20) state = 0;
 
@@ -428,14 +442,38 @@ bool gpio_force_bootloader()
 	return false;
 }
 
+int is_need_into_luftboot()
+{
+		/* Enable clock for the "USB vbus" pin bank and check for it */
+		rcc_periph_clock_enable(RCC_GPIOA);
+		gpio_set_mode(GPIOA, GPIO_MODE_INPUT,
+					  GPIO_CNF_INPUT_PULL_UPDOWN, GPIO8);
+		gpio_clear(GPIOA, GPIO8);
+//default pull 3.3v
+		if (!gpio_get(GPIOA, GPIO8)) {
+			/* If vbus pin high, disable the pin bank and return */
+			gpio_set_mode(GPIOA, GPIO_MODE_INPUT,
+						  GPIO_CNF_INPUT_FLOAT, GPIO8);
+			rcc_periph_clock_disable(RCC_GPIOA);
+			return 1;
+		}
+		/* Disable the pin bank */
+		gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT,
+					  GPIO8);
+		rcc_periph_clock_disable(RCC_GPIOA);
+		return 0;
+}
+
+
 int main(void)
 {
 	/* Check if the application is valid. */
-	if ((*(volatile uint32_t *)APP_ADDRESS & 0x2FFE0000) == 0x20000000) {
+	if ( 0== is_need_into_luftboot() && (*(volatile uint32_t *)APP_ADDRESS & 0x2FFE0000) == 0x20000000) {
 		/* Check if we have just downloaded the new code by looking at
 		 * the DATA0 option register or that we do NOT want to force
 		 * the bootloader
 		 */
+	#if ENABLE_FLASH_PROTECT
 		if (((FLASH_OBR & 0x3FC00) == 0x00) ||
 			(!gpio_force_bootloader() && 1)) {
 			/* If we DID just download new code, reset that data
@@ -456,6 +494,7 @@ int main(void)
 							   0x00FF);
 				flash_lock();
 			}
+
 			/* Set vector table base address. */
 			SCB_VTOR = APP_ADDRESS & 0xFFFF;
 			/* Initialise master stack pointer. */
@@ -464,8 +503,20 @@ int main(void)
 			/* Jump to application. */
 			(*(void (**)())(APP_ADDRESS + 4))();
 		}
+	#else
+
+
+				/* Set vector table base address. */
+			SCB_VTOR = APP_ADDRESS & 0xFFFF;
+			/* Initialise master stack pointer. */
+			asm volatile("msr msp, %0"::"g"
+					 (*(volatile uint32_t *)APP_ADDRESS));
+			/* Jump to application. */
+			(*(void (**)())(APP_ADDRESS + 4))();	
+	#endif //ENABLE_FLASH_PROTECT
 	}
 
+#if ENABLE_FLASH_PROTECT
 	if ((FLASH_WRPR & 0x03) != 0x00) {
 		flash_unlock();
 		FLASH_CR = 0;
@@ -473,6 +524,7 @@ int main(void)
 		flash_program_option_bytes(FLASH_OBP_RDP, FLASH_OBP_RDP_KEY);
 		flash_program_option_bytes(FLASH_OBP_WRP10, 0x03FC);
 	}
+#endif 
 
 #if LUFTBOOT_USE_48MHZ_INTERNAL_OSC
 #pragma message "Luftboot using 8MHz internal RC oscillator to PLL it to 48MHz."
@@ -494,7 +546,7 @@ int main(void)
 	/* Get serial number */
 	get_serial_string(serial_no);
 
-	usbd_device *device = usbd_init(&stm32f107_usb_driver, &dev, &config,
+	usbd_device *device = usbd_init(&stm32f103_usb_driver, &dev, &config,
 					usb_strings, 4, usbd_control_buffer,
 					sizeof(usbd_control_buffer));
 	usbd_register_control_callback( device,
