@@ -57,7 +57,18 @@
 
 
 #define ENABLE_FLASH_PROTECT 0
-
+#define ENABLE_MY_LED 1
+void led_init()
+{
+	rcc_periph_clock_enable(RCC_GPIOC);
+	gpio_set_mode(GPIOC, GPIO_MODE_OUTPUT_50_MHZ,
+				  GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
+	gpio_clear(GPIOC, GPIO13);
+}
+void led_toggle()
+{
+	gpio_toggle(GPIOC,GPIO13);
+}
 
 
 static const char
@@ -235,6 +246,9 @@ static int usbdfu_control_request(usbd_device *device,
 				  void (**complete)(usbd_device *device,
 						struct usb_setup_data *req))
 {
+#if ENABLE_MY_LED
+	led_toggle();
+#endif
 
 	if((req->bmRequestType & 0x7F) != 0x21)
 		return 0; /* Only accept class request */
@@ -289,6 +303,8 @@ static int usbdfu_control_request(usbd_device *device,
 
 	return 0;
 }
+
+
 
 static inline void gpio_init(void)
 {
@@ -528,7 +544,8 @@ int main(void)
 
 #if LUFTBOOT_USE_48MHZ_INTERNAL_OSC
 #pragma message "Luftboot using 8MHz internal RC oscillator to PLL it to 48MHz."
-	rcc_clock_setup_in_hsi_out_48mhz();
+	//rcc_clock_setup_in_hsi_out_48mhz();
+	rcc_clock_setup_in_hse_8mhz_out_72mhz();
 #else
 #pragma message "Luftboot using 12MHz external clock to PLL it to 72MHz."
 	rcc_clock_setup_in_hse_12mhz_out_72mhz();
@@ -536,6 +553,9 @@ int main(void)
 
 	rcc_periph_clock_enable(RCC_OTGFS);
 
+#if ENABLE_MY_LED
+	led_init();
+#else
 	gpio_init();
 
 	systick_set_clocksource(STK_CSR_CLKSOURCE_AHB);
@@ -543,6 +563,7 @@ int main(void)
 	systick_interrupt_enable();
 	systick_counter_enable();
 
+#endif
 	/* Get serial number */
 	get_serial_string(serial_no);
 
